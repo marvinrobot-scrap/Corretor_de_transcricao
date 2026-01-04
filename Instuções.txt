@@ -1,0 +1,12 @@
+1. Comando para transformar o vídeo em áudio usando o modo terminal:
+C:\ffmpeg\bin\ffmpeg.exe -i nome do arquivo.webm -vn -acodec pcm_s16le -ar 16000 -ac 1 audiencia.wav
+
+2. Comando para fazer a degravação simples do áudio:
+python -m whisper audiencia.wav --language Portuguese --model base
+
+3. Corrigir usando o VS conde:
+python gerar_narrativa_lmstudio.py audiencia.txt -n "Nome do Depoente" -p testemunha
+
+
+
+
