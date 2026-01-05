@@ -15,7 +15,7 @@ except ImportError:
 # ============== CONFIGURAÇÕES ==============
 MODELO_LM_STUDIO = "meta-llama-3.1-8b-instruct"
 URL_LM_STUDIO = "http://192.168.0.63:1234/v1/chat/completions"
-MODELO_WHISPER = "medium"  # Opções: tiny, base, small, medium, large
+MODELO_WHISPER = "large-v3"
 # ===========================================
 
 
@@ -182,7 +182,7 @@ def main():
     parser.add_argument(
         "-w", "--whisper-model",
         default=MODELO_WHISPER,
-        choices=["tiny", "base", "small", "medium", "large"],
+        choices=["tiny", "base", "small", "medium", "large", "large-v2", "large-v3"],
         help=f"Modelo Whisper a usar (padrão: {MODELO_WHISPER})."
     )
 
