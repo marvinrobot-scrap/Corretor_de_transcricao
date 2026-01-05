@@ -3,26 +3,66 @@ import os
 import sys
 import requests
 
+try:
+    import whisper
+except ImportError:
+    print("Erro: O módulo 'whisper' não está instalado.")
+    print("Instale com: pip install openai-whisper")
+    print("Também é necessário ter o FFmpeg instalado no sistema.")
+    sys.exit(1)
 
-# Nome do modelo fixo - altere aqui se necessário
+
+# ============== CONFIGURAÇÕES ==============
 MODELO_LM_STUDIO = "meta-llama-3.1-8b-instruct"
+URL_LM_STUDIO = "http://192.168.0.63:1234/v1/chat/completions"
+MODELO_WHISPER = "medium"  # Opções: tiny, base, small, medium, large
+# ===========================================
 
 
-def ler_arquivo_txt(caminho):
-    try:
-        with open(caminho, "r", encoding="utf-8", errors="ignore") as f:
-            return f.read()
-    except Exception as e:
-        print(f"Erro ao ler o arquivo de entrada: {e}")
-        sys.exit(1)
+def criar_pastas():
+    """Cria as pastas temp e result se não existirem."""
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    temp_dir = os.path.join(script_dir, "temp")
+    result_dir = os.path.join(script_dir, "result")
+    
+    os.makedirs(temp_dir, exist_ok=True)
+    os.makedirs(result_dir, exist_ok=True)
+    
+    return script_dir, temp_dir, result_dir
+
+
+def listar_arquivos_midia(temp_dir):
+    """Lista arquivos de vídeo/áudio na pasta temp."""
+    extensoes_validas = {'.mp4', '.mp3', '.wav', '.m4a', '.webm', '.mkv', '.avi', '.mov', '.flac', '.ogg'}
+    arquivos = []
+    
+    for arquivo in os.listdir(temp_dir):
+        _, ext = os.path.splitext(arquivo)
+        if ext.lower() in extensoes_validas:
+            arquivos.append(arquivo)
+    
+    return arquivos
+
+
+def transcrever_audio(caminho_arquivo, modelo_whisper):
+    """Transcreve áudio/vídeo usando Whisper."""
+    print(f"Carregando modelo Whisper '{modelo_whisper}'...")
+    model = whisper.load_model(modelo_whisper)
+    
+    print(f"Transcrevendo: {os.path.basename(caminho_arquivo)}")
+    print("Isso pode levar alguns minutos dependendo do tamanho do arquivo...")
+    
+    result = model.transcribe(caminho_arquivo, language="pt")
+    return result["text"]
 
 
 def escrever_arquivo_txt(caminho, conteudo):
+    """Escreve conteúdo em arquivo de texto."""
     try:
         with open(caminho, "w", encoding="utf-8") as f:
             f.write(conteudo)
     except Exception as e:
-        print(f"Erro ao escrever o arquivo de saída: {e}")
+        print(f"Erro ao escrever o arquivo: {e}")
         sys.exit(1)
 
 
@@ -49,7 +89,7 @@ def construir_prompt_sistema():
         "desde que plausível a partir da transcrição.\n"
         "11) Não reproduzir juramentos, qualificações pessoais excessivas (nome dos pais, RG, CPF, endereço etc.) "
         "ou formalidades do ato, a menos que sejam relevantes para a compreensão do conteúdo do depoimento.\n"
-        "12) A saída deve ser um texto contínuo, em um único parágrafo, pronto para ser salvo como .txt, sem cabeçalhos extras.\n"
+        "12) A saída deve ser um texto contínuo, em parágrafos, pronto para ser salvo como .txt, sem cabeçalhos extras.\n"
         "13) Suprimir as perguntas ou, quando estritamente necessário para o entendimento, convertê-las em trechos "
         "narrativos breves (por exemplo: \"Indagado sobre determinado fato, o depoente afirmou que...\").\n"
         "14) Presumir que há apenas UM depoente no arquivo recebido. Caso apareçam falas de juiz, promotor, defensor etc., "
@@ -83,7 +123,8 @@ def construir_prompt_usuario(nome_depoente, papel_depoente, transcricao):
     return texto_usuario
 
 
-def gerar_narrativa(nome_depoente, papel_depoente, transcricao, url_servidor):
+def gerar_narrativa(nome_depoente, papel_depoente, transcricao):
+    """Gera narrativa usando LM Studio."""
     system_prompt = construir_prompt_sistema()
     user_prompt = construir_prompt_usuario(nome_depoente, papel_depoente, transcricao)
 
@@ -98,7 +139,7 @@ def gerar_narrativa(nome_depoente, papel_depoente, transcricao, url_servidor):
     }
 
     try:
-        response = requests.post(url_servidor, json=payload, timeout=300)
+        response = requests.post(URL_LM_STUDIO, json=payload, timeout=300)
         if response.status_code >= 400:
             print("HTTP Status:", response.status_code)
             print("Resposta do LM Studio:", response.text)
@@ -117,18 +158,14 @@ def gerar_narrativa(nome_depoente, papel_depoente, transcricao, url_servidor):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Converter transcrição de audiência (.txt) em narrativa em terceira pessoa usando LM Studio."
+        description="Transcrever vídeo/áudio de audiência e converter em narrativa jurídica."
     )
 
     parser.add_argument(
-        "entrada",
-        help="Caminho do arquivo .txt com a transcrição do depoimento."
-    )
-    parser.add_argument(
-        "-o", "--saida",
+        "-a", "--arquivo",
         help=(
-            "Caminho do arquivo .txt de saída com a narrativa. "
-            "Se não informado, será usado o nome do arquivo de entrada com sufixo _narrativa.txt."
+            "Nome do arquivo de vídeo/áudio na pasta 'temp'. "
+            "Se não informado, processa o primeiro arquivo encontrado."
         )
     )
     parser.add_argument(
@@ -143,47 +180,77 @@ def main():
         help="Papel do depoente: vítima, testemunha, informante ou acusado."
     )
     parser.add_argument(
-        "-u", "--url",
-        default="http://192.168.0.63:1234/v1/chat/completions",
-        help=(
-            "URL do servidor LM Studio (padrão: http://192.168.0.63:1234/v1/chat/completions). "
-            "Ajuste se o LM Studio indicar outra."
-        )
+        "-w", "--whisper-model",
+        default=MODELO_WHISPER,
+        choices=["tiny", "base", "small", "medium", "large"],
+        help=f"Modelo Whisper a usar (padrão: {MODELO_WHISPER})."
     )
 
     args = parser.parse_args()
 
-    caminho_entrada = args.entrada
-    if not os.path.isfile(caminho_entrada):
-        print(f"Arquivo de entrada não encontrado: {caminho_entrada}")
-        sys.exit(1)
-
-    if args.saida:
-        caminho_saida = args.saida
+    # Criar estrutura de pastas
+    script_dir, temp_dir, result_dir = criar_pastas()
+    
+    # Encontrar arquivo de mídia
+    if args.arquivo:
+        caminho_midia = os.path.join(temp_dir, args.arquivo)
+        if not os.path.isfile(caminho_midia):
+            print(f"Arquivo não encontrado: {caminho_midia}")
+            sys.exit(1)
+        nome_arquivo = args.arquivo
     else:
-        base, ext = os.path.splitext(caminho_entrada)
-        caminho_saida = base + "_narrativa.txt"
+        arquivos = listar_arquivos_midia(temp_dir)
+        if not arquivos:
+            print(f"Nenhum arquivo de vídeo/áudio encontrado na pasta: {temp_dir}")
+            print("Extensões suportadas: .mp4, .mp3, .wav, .m4a, .webm, .mkv, .avi, .mov, .flac, .ogg")
+            sys.exit(1)
+        nome_arquivo = arquivos[0]
+        caminho_midia = os.path.join(temp_dir, nome_arquivo)
+        print(f"Arquivo encontrado: {nome_arquivo}")
 
+    # Preparar nomes de saída
+    nome_base, _ = os.path.splitext(nome_arquivo)
+    caminho_transcricao = os.path.join(result_dir, f"{nome_base}_transcricao.txt")
+    caminho_narrativa = os.path.join(result_dir, f"{nome_base}_narrativa.txt")
+
+    # Normalizar papel
     nome_depoente = args.nome.strip()
     papel_depoente = args.papel.strip().lower()
     if papel_depoente == "vitima":
         papel_depoente = "vítima"
 
-    transcricao = ler_arquivo_txt(caminho_entrada)
+    # Etapa 1: Transcrição com Whisper
+    print("\n" + "="*50)
+    print("ETAPA 1: TRANSCRIÇÃO COM WHISPER")
+    print("="*50)
+    
+    transcricao = transcrever_audio(caminho_midia, args.whisper_model)
+    escrever_arquivo_txt(caminho_transcricao, transcricao)
+    print(f"Transcrição salva em: {caminho_transcricao}")
 
+    # Etapa 2: Geração de narrativa com LM Studio
+    print("\n" + "="*50)
+    print("ETAPA 2: GERAÇÃO DE NARRATIVA COM LM STUDIO")
+    print("="*50)
     print(f"Usando modelo: {MODELO_LM_STUDIO}")
-    print("Gerando narrativa em terceira pessoa usando LM Studio. Isso pode levar alguns minutos...")
+    print("Gerando narrativa em terceira pessoa. Isso pode levar alguns minutos...")
 
     narrativa = gerar_narrativa(
         nome_depoente=nome_depoente,
         papel_depoente=papel_depoente,
-        transcricao=transcricao,
-        url_servidor=args.url
+        transcricao=transcricao
     )
 
-    escrever_arquivo_txt(caminho_saida, narrativa)
+    escrever_arquivo_txt(caminho_narrativa, narrativa)
+    print(f"Narrativa salva em: {caminho_narrativa}")
 
-    print(f"Narrativa gerada com sucesso em: {caminho_saida}")
+    # Resumo final
+    print("\n" + "="*50)
+    print("PROCESSAMENTO CONCLUÍDO!")
+    print("="*50)
+    print(f"Arquivos gerados na pasta 'result':")
+    print(f"  - Transcrição: {nome_base}_transcricao.txt")
+    print(f"  - Narrativa:   {nome_base}_narrativa.txt")
 
 
 if __name__ == "__main__":
