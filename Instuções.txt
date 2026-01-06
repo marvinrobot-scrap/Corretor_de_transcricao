@@ -10,8 +10,8 @@ python gerar_narrativa_lmstudio.py audiencia.txt -n "Nome do Depoente" -p testem
 4. Se precisar mudar o modelo no futuro:
 mudar a linha 8 MODELO_LM_STUDIO = "meta-llama-3.1-8b-instruct"
 
-5. python transcricao_narrativa.py -n "João da Silva" -p testemunha
+5. python gerar_narrativa_lmstudio.py -n "João da Silva" -p testemunha
 -n "Nome" Nome do depoente (obrigatório)
 -p papel Papel: vítima, testemunha, informante, acusado (obrigatório)
 -a arquivo.mp4 Nome específico do arquivo na pasta temp (opcional)
--w medium Modelo Whisper: tiny, base, small, medium, large (padrão: medium)
+-w medium Modelo Whisper: tiny, base, small, medium, large (padrão: large-v3)
