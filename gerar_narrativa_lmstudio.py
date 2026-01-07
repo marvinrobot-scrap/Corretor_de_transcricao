@@ -14,7 +14,7 @@ except ImportError:
 
 # ============== CONFIGURAÇÕES ==============
 MODELO_LM_STUDIO = "meta-llama-3.1-8b-instruct"
-URL_LM_STUDIO = "http://192.168.0.144:1234/v1/chat/completions"
+URL_LM_STUDIO = "http://localhost:1234/v1/chat/completions"
 MODELO_WHISPER = "large-v3"
 # ===========================================
 
