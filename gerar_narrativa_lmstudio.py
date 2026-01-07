@@ -7,7 +7,7 @@ try:
     import whisper
 except ImportError:
     print("Erro: O módulo 'whisper' não está instalado.")
-    print("Instale com: pip install openai-whisper")
+    print("Instale com: py -m pip install openai-whisper")
     print("Também é necessário ter o FFmpeg instalado no sistema.")
     sys.exit(1)
 
@@ -15,8 +15,11 @@ except ImportError:
 # ============== CONFIGURAÇÕES ==============
 MODELO_LM_STUDIO = "meta-llama-3.1-8b-instruct"
 URL_LM_STUDIO = "http://localhost:1234/v1/chat/completions"
-MODELO_WHISPER = "large-v3"
+MODELO_WHISPER = "large"  # Opções: tiny, base, small, medium, large
 # ===========================================
+
+# Papéis válidos para extração do nome do arquivo
+PAPEIS_VALIDOS = ["vitima", "vítima", "testemunha", "informante", "acusado"]
 
 
 def criar_pastas():
@@ -41,14 +44,43 @@ def listar_arquivos_midia(temp_dir):
         if ext.lower() in extensoes_validas:
             arquivos.append(arquivo)
     
-    return arquivos
+    return sorted(arquivos)
 
 
-def transcrever_audio(caminho_arquivo, modelo_whisper):
-    """Transcreve áudio/vídeo usando Whisper."""
-    print(f"Carregando modelo Whisper '{modelo_whisper}'...")
-    model = whisper.load_model(modelo_whisper)
+def extrair_nome_papel(nome_arquivo):
+    """
+    Extrai nome do depoente e papel a partir do nome do arquivo.
+    Formato esperado: Nome do Depoente_papel.extensao
+    Exemplo: João Silva_testemunha.mp4 -> ("João Silva", "testemunha")
+    """
+    # Remove a extensão
+    nome_base, _ = os.path.splitext(nome_arquivo)
     
+    # Tenta encontrar o separador underscore
+    if "_" not in nome_base:
+        return None, None
+    
+    # Divide pelo último underscore
+    partes = nome_base.rsplit("_", 1)
+    if len(partes) != 2:
+        return None, None
+    
+    nome_depoente = partes[0].strip()
+    papel_depoente = partes[1].strip().lower()
+    
+    # Normaliza "vitima" para "vítima"
+    if papel_depoente == "vitima":
+        papel_depoente = "vítima"
+    
+    # Verifica se o papel é válido
+    if papel_depoente not in PAPEIS_VALIDOS:
+        return nome_depoente, None
+    
+    return nome_depoente, papel_depoente
+
+
+def transcrever_audio(caminho_arquivo, model):
+    """Transcreve áudio/vídeo usando Whisper."""
     print(f"Transcrevendo: {os.path.basename(caminho_arquivo)}")
     print("Isso pode levar alguns minutos dependendo do tamanho do arquivo...")
     
@@ -63,7 +95,8 @@ def escrever_arquivo_txt(caminho, conteudo):
             f.write(conteudo)
     except Exception as e:
         print(f"Erro ao escrever o arquivo: {e}")
-        sys.exit(1)
+        return False
+    return True
 
 
 def construir_prompt_sistema():
@@ -89,7 +122,7 @@ def construir_prompt_sistema():
         "desde que plausível a partir da transcrição.\n"
         "11) Não reproduzir juramentos, qualificações pessoais excessivas (nome dos pais, RG, CPF, endereço etc.) "
         "ou formalidades do ato, a menos que sejam relevantes para a compreensão do conteúdo do depoimento.\n"
-        "12) A saída deve ser um texto contínuo, em parágrafos, pronto para ser salvo como .txt, sem cabeçalhos extras.\n"
+        "12) A saída deve ser um texto contínuo, sem parágrafos, pronto para ser salvo como .txt, sem cabeçalhos extras.\n"
         "13) Suprimir as perguntas ou, quando estritamente necessário para o entendimento, convertê-las em trechos "
         "narrativos breves (por exemplo: \"Indagado sobre determinado fato, o depoente afirmou que...\").\n"
         "14) Presumir que há apenas UM depoente no arquivo recebido. Caso apareçam falas de juiz, promotor, defensor etc., "
@@ -143,7 +176,7 @@ def gerar_narrativa(nome_depoente, papel_depoente, transcricao):
         if response.status_code >= 400:
             print("HTTP Status:", response.status_code)
             print("Resposta do LM Studio:", response.text)
-            sys.exit(1)
+            return None
         resultado = response.json()
         return resultado["choices"][0]["message"]["content"].strip()
     except Exception as e:
@@ -153,36 +186,66 @@ def gerar_narrativa(nome_depoente, papel_depoente, transcricao):
         print("  2) Se o servidor local está rodando na aba 'Local Server'.")
         print("  3) Se a URL está correta.")
         print(f"  4) Se o modelo '{MODELO_LM_STUDIO}' está carregado.")
-        sys.exit(1)
+        return None
+
+
+def processar_arquivo(caminho_midia, nome_arquivo, result_dir, whisper_model):
+    """Processa um único arquivo de mídia."""
+    
+    # Extrair nome e papel do nome do arquivo
+    nome_depoente, papel_depoente = extrair_nome_papel(nome_arquivo)
+    
+    if not nome_depoente or not papel_depoente:
+        print(f"\n[ERRO] Não foi possível extrair nome/papel do arquivo: {nome_arquivo}")
+        print(f"       Formato esperado: Nome do Depoente_papel.extensao")
+        print(f"       Exemplo: João Silva_testemunha.mp4")
+        print(f"       Papéis válidos: {', '.join(PAPEIS_VALIDOS)}")
+        return False
+    
+    print(f"\n  Depoente: {nome_depoente}")
+    print(f"  Papel: {papel_depoente}")
+    
+    # Preparar nomes de saída
+    nome_base, _ = os.path.splitext(nome_arquivo)
+    caminho_transcricao = os.path.join(result_dir, f"{nome_base}_transcricao.txt")
+    caminho_narrativa = os.path.join(result_dir, f"{nome_base}_narrativa.txt")
+    
+    # Etapa 1: Transcrição com Whisper
+    print("\n  [1/2] Transcrevendo áudio...")
+    transcricao = transcrever_audio(caminho_midia, whisper_model)
+    
+    if not escrever_arquivo_txt(caminho_transcricao, transcricao):
+        return False
+    print(f"        Transcrição salva: {os.path.basename(caminho_transcricao)}")
+    
+    # Etapa 2: Geração de narrativa com LM Studio
+    print("\n  [2/2] Gerando narrativa...")
+    narrativa = gerar_narrativa(
+        nome_depoente=nome_depoente,
+        papel_depoente=papel_depoente,
+        transcricao=transcricao
+    )
+    
+    if narrativa is None:
+        print("        [ERRO] Falha ao gerar narrativa.")
+        return False
+    
+    if not escrever_arquivo_txt(caminho_narrativa, narrativa):
+        return False
+    print(f"        Narrativa salva: {os.path.basename(caminho_narrativa)}")
+    
+    return True
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Transcrever vídeo/áudio de audiência e converter em narrativa jurídica."
+        description="Transcrever vídeos/áudios de audiências e converter em narrativas jurídicas (processamento em lote)."
     )
 
     parser.add_argument(
-        "-a", "--arquivo",
-        help=(
-            "Nome do arquivo de vídeo/áudio na pasta 'temp'. "
-            "Se não informado, processa o primeiro arquivo encontrado."
-        )
-    )
-    parser.add_argument(
-        "-n", "--nome",
-        required=True,
-        help="Nome completo do depoente (ex.: 'Fulano de Tal')."
-    )
-    parser.add_argument(
-        "-p", "--papel",
-        required=True,
-        choices=["vítima", "vitima", "testemunha", "informante", "acusado"],
-        help="Papel do depoente: vítima, testemunha, informante ou acusado."
-    )
-    parser.add_argument(
         "-w", "--whisper-model",
         default=MODELO_WHISPER,
-        choices=["tiny", "base", "small", "medium", "large", "large-v2", "large-v3"],
+        choices=["tiny", "base", "small", "medium", "large"],
         help=f"Modelo Whisper a usar (padrão: {MODELO_WHISPER})."
     )
 
@@ -191,66 +254,61 @@ def main():
     # Criar estrutura de pastas
     script_dir, temp_dir, result_dir = criar_pastas()
     
-    # Encontrar arquivo de mídia
-    if args.arquivo:
-        caminho_midia = os.path.join(temp_dir, args.arquivo)
-        if not os.path.isfile(caminho_midia):
-            print(f"Arquivo não encontrado: {caminho_midia}")
-            sys.exit(1)
-        nome_arquivo = args.arquivo
-    else:
-        arquivos = listar_arquivos_midia(temp_dir)
-        if not arquivos:
-            print(f"Nenhum arquivo de vídeo/áudio encontrado na pasta: {temp_dir}")
-            print("Extensões suportadas: .mp4, .mp3, .wav, .m4a, .webm, .mkv, .avi, .mov, .flac, .ogg")
-            sys.exit(1)
-        nome_arquivo = arquivos[0]
-        caminho_midia = os.path.join(temp_dir, nome_arquivo)
-        print(f"Arquivo encontrado: {nome_arquivo}")
-
-    # Preparar nomes de saída
-    nome_base, _ = os.path.splitext(nome_arquivo)
-    caminho_transcricao = os.path.join(result_dir, f"{nome_base}_transcricao.txt")
-    caminho_narrativa = os.path.join(result_dir, f"{nome_base}_narrativa.txt")
-
-    # Normalizar papel
-    nome_depoente = args.nome.strip()
-    papel_depoente = args.papel.strip().lower()
-    if papel_depoente == "vitima":
-        papel_depoente = "vítima"
-
-    # Etapa 1: Transcrição com Whisper
-    print("\n" + "="*50)
-    print("ETAPA 1: TRANSCRIÇÃO COM WHISPER")
-    print("="*50)
+    # Listar arquivos de mídia
+    arquivos = listar_arquivos_midia(temp_dir)
     
-    transcricao = transcrever_audio(caminho_midia, args.whisper_model)
-    escrever_arquivo_txt(caminho_transcricao, transcricao)
-    print(f"Transcrição salva em: {caminho_transcricao}")
-
-    # Etapa 2: Geração de narrativa com LM Studio
-    print("\n" + "="*50)
-    print("ETAPA 2: GERAÇÃO DE NARRATIVA COM LM STUDIO")
-    print("="*50)
-    print(f"Usando modelo: {MODELO_LM_STUDIO}")
-    print("Gerando narrativa em terceira pessoa. Isso pode levar alguns minutos...")
-
-    narrativa = gerar_narrativa(
-        nome_depoente=nome_depoente,
-        papel_depoente=papel_depoente,
-        transcricao=transcricao
-    )
-
-    escrever_arquivo_txt(caminho_narrativa, narrativa)
-    print(f"Narrativa salva em: {caminho_narrativa}")
-
+    if not arquivos:
+        print(f"Nenhum arquivo de vídeo/áudio encontrado na pasta: {temp_dir}")
+        print("Extensões suportadas: .mp4, .mp3, .wav, .m4a, .webm, .mkv, .avi, .mov, .flac, .ogg")
+        print(f"\nFormato do nome do arquivo: Nome do Depoente_papel.extensao")
+        print(f"Exemplo: João Silva_testemunha.mp4")
+        print(f"Papéis válidos: {', '.join(PAPEIS_VALIDOS)}")
+        sys.exit(1)
+    
+    print("="*60)
+    print("PROCESSAMENTO EM LOTE DE AUDIÊNCIAS")
+    print("="*60)
+    print(f"\nArquivos encontrados: {len(arquivos)}")
+    for i, arq in enumerate(arquivos, 1):
+        print(f"  {i}. {arq}")
+    
+    # Carregar modelo Whisper uma única vez
+    print(f"\nCarregando modelo Whisper '{args.whisper_model}'...")
+    whisper_model = whisper.load_model(args.whisper_model)
+    print("Modelo carregado com sucesso!")
+    
+    # Processar cada arquivo
+    sucessos = 0
+    falhas = 0
+    arquivos_com_erro = []
+    
+    for i, nome_arquivo in enumerate(arquivos, 1):
+        print("\n" + "="*60)
+        print(f"PROCESSANDO ARQUIVO {i}/{len(arquivos)}: {nome_arquivo}")
+        print("="*60)
+        
+        caminho_midia = os.path.join(temp_dir, nome_arquivo)
+        
+        if processar_arquivo(caminho_midia, nome_arquivo, result_dir, whisper_model):
+            sucessos += 1
+        else:
+            falhas += 1
+            arquivos_com_erro.append(nome_arquivo)
+    
     # Resumo final
-    print("\n" + "="*50)
+    print("\n" + "="*60)
     print("PROCESSAMENTO CONCLUÍDO!")
-    print("="*50)
-    print(f"Arquivos gerados na pasta 'result':")
-    print(f"  - Transcrição: {nome_base}_transcricao.txt")
-    print(f"  - Narrativa:   {nome_base}_narrativa.txt")
+    print("="*60)
+    print(f"\nTotal de arquivos: {len(arquivos)}")
+    print(f"  Sucessos: {sucessos}")
+    print(f"  Falhas: {falhas}")
+    
+    if arquivos_com_erro:
+        print(f"\nArquivos com erro:")
+        for arq in arquivos_com_erro:
+            print(f"  - {arq}")
+    
+    print(f"\nResultados salvos na pasta: {result_dir}")
 
 
 if __name__ == "__main__":
