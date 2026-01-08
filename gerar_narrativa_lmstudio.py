@@ -2,7 +2,7 @@ import os
 import sys
 import time
 
-# --- SOLUÇÃO ROBUSTA PARA DLLS NVIDIA E PREVENÇÃO DE FECHAMENTO ---
+# --- SOLUÇÃO PARA DLLS NVIDIA ---
 def configurar_ambiente_gpu():
     import importlib.util
     for modulo_nome in ["nvidia.cublas", "nvidia.cudnn"]:
@@ -19,7 +19,6 @@ def configurar_ambiente_gpu():
 
 configurar_ambiente_gpu()
 
-import argparse
 import requests
 
 try:
@@ -66,7 +65,11 @@ def transcrever_audio(caminho_arquivo, model):
 
 def gerar_narrativa(nome, papel, transcricao, url, modelo_llm):
     print(f"[LLM] Gerando narrativa jurídica...")
-    system_prompt = "Você é um assistente jurídico. Converta a transcrição em uma narrativa formal em terceira pessoa."
+    system_prompt = (
+        "Você é um assistente jurídico especializado. Converta a transcrição em uma narrativa formal "
+        "em terceira pessoa. Inicie com: '[NOME], ouvido(a) em juízo, disse que'. "
+        "Remova perguntas, corrija erros gramaticais e mantenha o tom solene."
+    )
     user_prompt = f"Depoente: {nome} ({papel})\n\nTranscrição:\n{transcricao}"
     payload = {
         "model": modelo_llm,
@@ -74,7 +77,8 @@ def gerar_narrativa(nome, papel, transcricao, url, modelo_llm):
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt}
         ],
-        "temperature": 0.2
+        "temperature": 0.2,
+        "max_tokens": 8192
     }
     try:
         response = requests.post(url, json=payload, timeout=600)
@@ -87,47 +91,54 @@ def main():
     try:
         temp_dir, result_dir = criar_pastas()
         
+        # LISTA AMPLIADA DE FORMATOS (Incluindo .webm)
+        extensoes_suportadas = (
+            '.mp4', '.mp3', '.wav', '.m4a', '.webm', 
+            '.mkv', '.avi', '.mov', '.flac', '.ogg', '.wmv'
+        )
+        
         print(f"Carregando {MODELO_WHISPER} na RTX 4070 (Float16)...")
-        # Otimização: se falhar na GPU, ele avisa em vez de fechar
         try:
             model = WhisperModel(MODELO_WHISPER, device="cuda", compute_type="float16")
         except Exception as e:
-            print(f"\nAVISO: Não foi possível usar a GPU (RTX 4070).")
-            print(f"Causa provável: Memória de vídeo cheia ou DLLs ausentes.")
-            print(f"Erro técnico: {e}")
-            print("\nTentando carregar na CPU (será bem mais lento)...")
+            print(f"\nAVISO: Não foi possível usar a GPU. Erro: {e}")
+            print("Tentando carregar na CPU (será lento)...")
             model = WhisperModel(MODELO_WHISPER, device="cpu", compute_type="int8")
 
-        arquivos = [f for f in os.listdir(temp_dir) if f.lower().endswith(('.mp4', '.mp3', '.wav', '.m4a'))]
+        arquivos = [f for f in os.listdir(temp_dir) if f.lower().endswith(extensoes_suportadas)]
         
         if not arquivos:
-            print("\nNenhum arquivo encontrado na pasta /temp.")
-            print("Formato esperado: Nome do Depoente_papel.mp4")
+            print(f"\nNenhum arquivo encontrado na pasta: {temp_dir}")
+            print(f"Formatos procurados: {', '.join(extensoes_suportadas)}")
+            print("Certifique-se de que os arquivos seguem o padrão: Nome_papel.extensao")
         
         for arq in arquivos:
             nome_base, _ = os.path.splitext(arq)
             if "_" not in nome_base:
-                print(f"Pulei {arq} (faltou o '_' no nome)")
+                print(f"\n[PULADO] Arquivo '{arq}' não possui '_' no nome.")
+                print("Use o formato: Nome do Depoente_papel.webm")
                 continue
                 
             nome, papel = nome_base.rsplit("_", 1)
             res = transcrever_audio(os.path.join(temp_dir, arq), model)
             
-            txt_tempos = "\n".join([f"{formatar_timestamp(s['start'])} {s['text']}" for s in res["segments"]])
+            # Salvar Timestamps
+            txt_tempos = "\n".join([f"{formatar_timestamp(s['start'])} {s['text'].strip()}" for s in res["segments"]])
             with open(os.path.join(result_dir, f"{nome_base}_timestamps.txt"), "w", encoding="utf-8") as f:
                 f.write(txt_tempos)
 
+            # Gerar Narrativa
             narrativa = gerar_narrativa(nome, papel, res["text"], URL_LM_STUDIO_PADRAO, MODELO_LM_STUDIO)
             if narrativa:
                 with open(os.path.join(result_dir, f"{nome_base}_narrativa.txt"), "w", encoding="utf-8") as f:
                     f.write(narrativa)
-                print(f"Concluído com sucesso: {arq}")
+                print(f"Sucesso: {arq}")
 
     except Exception as e:
-        print(f"\n--- OCORREU UM ERRO INESPERADO ---")
+        print(f"\n--- ERRO CRÍTICO ---")
         print(e)
     
-    input("\nProcesso finalizado. Pressione Enter para fechar esta janela...")
+    input("\nFim do processo. Pressione Enter para fechar...")
 
 if __name__ == "__main__":
     main()
