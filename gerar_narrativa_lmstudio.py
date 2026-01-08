@@ -1,23 +1,30 @@
 import os
 import sys
 
-# --- SOLUÇÃO PARA ERRO DE DLL NVIDIA ---
-def carregar_dlls_nvidia():
-    """Adiciona as pastas das bibliotecas NVIDIA ao PATH do sistema."""
-    try:
-        import nvidia.cublas
-        import nvidia.cudnn
-        cublas_path = os.path.join(os.path.dirname(nvidia.cublas.__file__), "bin")
-        cudnn_path = os.path.join(os.path.dirname(nvidia.cudnn.__file__), "bin")
-        os.environ["PATH"] += os.pathsep + cublas_path + os.pathsep + cudnn_path
-        if hasattr(os, "add_dll_directory"):
-            os.add_dll_directory(cublas_path)
-            os.add_dll_directory(cudnn_path)
-    except ImportError:
-        pass
+# --- NOVA SOLUÇÃO ROBUSTA PARA DLLS NVIDIA ---
+def configurar_ambiente_gpu():
+    """Localiza e carrega as bibliotecas CUDA instaladas via pip."""
+    import importlib.util
+    
+    for modulo_nome in ["nvidia.cublas", "nvidia.cudnn"]:
+        spec = importlib.util.find_spec(modulo_nome)
+        if spec and spec.origin:
+            # Pega a pasta 'bin' dentro do pacote instalado
+            modulo_dir = os.path.dirname(spec.origin)
+            bin_path = os.path.join(modulo_dir, "bin")
+            
+            if os.path.exists(bin_path):
+                # Adiciona ao PATH para compatibilidade geral
+                os.environ["PATH"] = bin_path + os.pathsep + os.environ["PATH"]
+                # Método específico para Python 3.8+ no Windows
+                if hasattr(os, "add_dll_directory"):
+                    try:
+                        os.add_dll_directory(bin_path)
+                    except Exception:
+                        pass
 
-carregar_dlls_nvidia()
-# ---------------------------------------
+configurar_ambiente_gpu()
+# ---------------------------------------------
 
 import argparse
 import requests
