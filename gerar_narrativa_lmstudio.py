@@ -1,21 +1,38 @@
-import argparse
 import os
 import sys
+
+# --- SOLUÇÃO PARA ERRO DE DLL NVIDIA ---
+def carregar_dlls_nvidia():
+    """Adiciona as pastas das bibliotecas NVIDIA ao PATH do sistema."""
+    try:
+        import nvidia.cublas
+        import nvidia.cudnn
+        cublas_path = os.path.join(os.path.dirname(nvidia.cublas.__file__), "bin")
+        cudnn_path = os.path.join(os.path.dirname(nvidia.cudnn.__file__), "bin")
+        os.environ["PATH"] += os.pathsep + cublas_path + os.pathsep + cudnn_path
+        if hasattr(os, "add_dll_directory"):
+            os.add_dll_directory(cublas_path)
+            os.add_dll_directory(cudnn_path)
+    except ImportError:
+        pass
+
+carregar_dlls_nvidia()
+# ---------------------------------------
+
+import argparse
 import requests
 
-# Tenta importar o faster-whisper
 try:
     from faster_whisper import WhisperModel
 except ImportError:
     print("Erro: O módulo 'faster-whisper' não está instalado.")
-    print("Instale com: py -m pip install faster-whisper")
     sys.exit(1)
 
-# ============== CONFIGURAÇÕES PADRÃO ==============
+# ============== CONFIGURAÇÕES ==============
 MODELO_LM_STUDIO = "qwen2.5-7b-instruct-1m@q8_0" 
 URL_LM_STUDIO_PADRAO = "http://localhost:1234/v1/chat/completions"
 MODELO_WHISPER = "large-v3" 
-# ==================================================
+# ===========================================
 
 PAPEIS_VALIDOS = ["vitima", "vítima", "testemunha", "informante", "acusado"]
 
@@ -25,21 +42,7 @@ def criar_pastas():
     result_dir = os.path.join(script_dir, "result")
     os.makedirs(temp_dir, exist_ok=True)
     os.makedirs(result_dir, exist_ok=True)
-    return script_dir, temp_dir, result_dir
-
-def listar_arquivos_midia(temp_dir):
-    extensoes_validas = {'.mp4', '.mp3', '.wav', '.m4a', '.webm', '.mkv', '.avi', '.mov', '.flac', '.ogg'}
-    return sorted([f for f in os.listdir(temp_dir) if os.path.splitext(f)[1].lower() in extensoes_validas])
-
-def extrair_nome_papel(nome_arquivo):
-    nome_base, _ = os.path.splitext(nome_arquivo)
-    if "_" not in nome_base: return None, None
-    partes = nome_base.rsplit("_", 1)
-    if len(partes) != 2: return None, None
-    nome_depoente = partes[0].strip()
-    papel_depoente = partes[1].strip().lower()
-    if papel_depoente == "vitima": papel_depoente = "vítima"
-    return (nome_depoente, papel_depoente) if papel_depoente in PAPEIS_VALIDOS else (nome_depoente, None)
+    return temp_dir, result_dir
 
 def formatar_timestamp(segundos):
     horas = int(segundos // 3600)
@@ -48,45 +51,37 @@ def formatar_timestamp(segundos):
     return f"[{horas:02d}:{minutos:02d}:{segs:02d}]"
 
 def transcrever_audio(caminho_arquivo, model):
-    """Usa faster-whisper para máxima performance na RTX 4070."""
-    print(f"Transcrevendo com aceleração GPU: {os.path.basename(caminho_arquivo)}")
+    """Transcrição ultra-rápida usando Cuda e Float16 na RTX 4070."""
+    print(f"\n[Whisper] Transcrevendo: {os.path.basename(caminho_arquivo)}")
     
-    # beam_size=2 é o equilíbrio ideal para sua GPU
-    segments, info = model.transcribe(
+    segments, _ = model.transcribe(
         caminho_arquivo, 
         language="pt", 
         beam_size=2,
-        vad_filter=True,
+        vad_filter=True, # Remove silêncios para ganhar tempo
         vad_parameters=dict(min_silence_duration_ms=500)
     )
     
     lista_segmentos = list(segments)
-    texto_completo = " ".join([seg.text.strip() for seg in lista_segmentos])
+    texto_completo = " ".join([s.text.strip() for s in lista_segmentos])
     
     return {
         "text": texto_completo,
-        "segments": [{"start": seg.start, "text": seg.text} for seg in lista_segmentos]
+        "segments": [{"start": s.start, "text": s.text} for s in lista_segmentos]
     }
 
-def escrever_arquivo_txt(caminho, conteudo):
-    try:
-        with open(caminho, "w", encoding="utf-8") as f:
-            f.write(conteudo)
-        return True
-    except Exception as e:
-        print(f"Erro ao escrever arquivo: {e}")
-        return False
-
-def gerar_narrativa(nome_depoente, papel_depoente, transcricao, url_lm_studio, modelo_lm):
+def gerar_narrativa(nome, papel, transcricao, url, modelo_llm):
+    """Envia para o LM Studio."""
+    print(f"[LLM] Gerando narrativa jurídica...")
     system_prompt = (
-        "Você é um assistente jurídico especializado. Converta a transcrição em uma narrativa formal "
+        "Você é um assistente jurídico. Converta a transcrição em uma narrativa formal "
         "em terceira pessoa. Inicie com: '[NOME], ouvido(a) em juízo, disse que'. "
-        "Remova perguntas, corrija erros gramaticais e mantenha o tom solene."
+        "Remova perguntas, corrija erros e mantenha o tom solene."
     )
-    user_prompt = f"Depoente: {nome_depoente} ({papel_depoente})\n\nTranscrição:\n{transcricao}"
+    user_prompt = f"Depoente: {nome} ({papel})\n\nTranscrição:\n{transcricao}"
 
     payload = {
-        "model": modelo_lm,
+        "model": modelo_llm,
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt}
@@ -96,55 +91,45 @@ def gerar_narrativa(nome_depoente, papel_depoente, transcricao, url_lm_studio, m
     }
 
     try:
-        response = requests.post(url_lm_studio, json=payload, timeout=600)
+        response = requests.post(url, json=payload, timeout=600)
         return response.json()["choices"][0]["message"]["content"].strip()
-    except:
+    except Exception as e:
+        print(f"Erro no LM Studio: {e}")
         return None
 
-def processar_arquivo(caminho_midia, nome_arquivo, result_dir, whisper_model, url_url, modelo_llm):
-    nome_depoente, papel_depoente = extrair_nome_papel(nome_arquivo)
-    if not nome_depoente or not papel_depoente:
-        print(f"Erro no nome do arquivo: {nome_arquivo}")
-        return False
-
-    nome_base, _ = os.path.splitext(nome_arquivo)
-    res = transcrever_audio(caminho_midia, whisper_model)
-    
-    # Salvar Transcrição Limpa
-    escrever_arquivo_txt(os.path.join(result_dir, f"{nome_base}_transcricao.txt"), res["text"])
-    
-    # Salvar Timestamps
-    texto_tempos = "\n".join([f"{formatar_timestamp(s['start'])} {s['text'].strip()}" for s in res["segments"]])
-    escrever_arquivo_txt(os.path.join(result_dir, f"{nome_base}_timestamps.txt"), texto_tempos)
-    
-    # Gerar Narrativa
-    print(f"Gerando narrativa via LM Studio...")
-    narrativa = gerar_narrativa(nome_depoente, papel_depoente, res["text"], url_url, modelo_llm)
-    if narrativa:
-        escrever_arquivo_txt(os.path.join(result_dir, f"{nome_base}_narrativa.txt"), narrativa)
-        return True
-    return False
-
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("-w", "--whisper-model", default=MODELO_WHISPER)
-    parser.add_argument("-u", "--url", default=URL_LM_STUDIO_PADRAO)
-    parser.add_argument("-m", "--modelo", default=MODELO_LM_STUDIO)
-    args = parser.parse_args()
-
-    _, temp_dir, result_dir = criar_pastas()
-    arquivos = listar_arquivos_midia(temp_dir)
+    temp_dir, result_dir = criar_pastas()
     
-    if not arquivos:
-        print("Pasta /temp vazia.")
-        return
+    # Carregando modelo na GPU
+    print(f"Carregando {MODELO_WHISPER} na RTX 4070 (Float16)...")
+    try:
+        model = WhisperModel(MODELO_WHISPER, device="cuda", compute_type="float16")
+    except Exception as e:
+        print(f"Erro ao iniciar GPU: {e}. Tentando modo CPU (lento)...")
+        model = WhisperModel(MODELO_WHISPER, device="cpu", compute_type="int8")
 
-    print(f"Carregando {args.whisper_model} na RTX 4070...")
-    # Configuração otimizada para sua GPU
-    whisper_model = WhisperModel(args.whisper_model, device="cuda", compute_type="float16")
+    arquivos = [f for f in os.listdir(temp_dir) if f.lower().endswith(('.mp4', '.mp3', '.wav', '.m4a'))]
     
     for arq in arquivos:
-        processar_arquivo(os.path.join(temp_dir, arq), arq, result_dir, whisper_model, args.url, args.modelo)
+        nome_base, _ = os.path.splitext(arq)
+        if "_" not in nome_base:
+            print(f"Pulei {arq} (Formato Nome_papel.ext necessário)")
+            continue
+            
+        nome, papel = nome_base.rsplit("_", 1)
+        res = transcrever_audio(os.path.join(temp_dir, arq), model)
+        
+        # Salva Timestamps
+        txt_tempos = "\n".join([f"{formatar_timestamp(s['start'])} {s['text']}" for s in res["segments"]])
+        with open(os.path.join(result_dir, f"{nome_base}_timestamps.txt"), "w", encoding="utf-8") as f:
+            f.write(txt_tempos)
+
+        # Narrativa
+        narrativa = gerar_narrativa(nome, papel, res["text"], URL_LM_STUDIO_PADRAO, MODELO_LM_STUDIO)
+        if narrativa:
+            with open(os.path.join(result_dir, f"{nome_base}_narrativa.txt"), "w", encoding="utf-8") as f:
+                f.write(narrativa)
+            print(f"Concluído: {arq}")
 
 if __name__ == "__main__":
     main()
