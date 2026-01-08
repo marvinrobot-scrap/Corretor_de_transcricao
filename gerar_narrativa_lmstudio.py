@@ -4,7 +4,7 @@ import sys
 import requests
 
 try:
-    import whisper
+    from faster_whisper import WhisperModel
 except ImportError:
     print("Erro: O módulo 'whisper' não está instalado.")
     print("Instale com: py -m pip install openai-whisper")
@@ -70,24 +70,30 @@ def formatar_timestamp(segundos):
 
 
 def transcrever_audio(caminho_arquivo, model):
-    """Transcreve áudio/vídeo usando Whisper e retorna o dicionário completo de resultados."""
+    """Transcreve usando faster-whisper com máxima performance na GPU."""
     print(f"Transcrevendo: {os.path.basename(caminho_arquivo)}")
     
-    result = model.transcribe(
+    # O faster-whisper separa a transcrição em 'segments' (gerador) e 'info'
+    segments, info = model.transcribe(
         caminho_arquivo,
         language="pt",
-        task="transcribe",
-        beam_size=5,
-        best_of=5,
-        temperature=0,
-        condition_on_previous_text=True,
-        compression_ratio_threshold=2.4,
-        logprob_threshold=-1.0,
-        no_speech_threshold=0.6,
-        word_timestamps=True,
-        verbose=False
+        beam_size=2,        # Reduzido de 5 para 2 para ganhar velocidade (mantendo precisão)
+        vad_filter=True,    # Filtro de voz que remove silêncios automaticamente
+        vad_parameters=dict(min_silence_duration_ms=500)
     )
-    return result
+    
+    # Precisamos converter o gerador em uma lista para processar os dados
+    lista_segmentos = list(segments)
+    
+    # Reconstruímos o dicionário para manter compatibilidade com o resto do script
+    texto_completo = " ".join([seg.text.strip() for seg in lista_segmentos])
+    
+    return {
+        "text": texto_completo,
+        "segments": [
+            {"start": seg.start, "text": seg.text} for seg in lista_segmentos
+        ]
+    }
 
 
 def escrever_arquivo_txt(caminho, conteudo):
@@ -202,7 +208,8 @@ def main():
         sys.exit(1)
     
     print(f"Carregando Whisper {args.whisper_model}...")
-    whisper_model = whisper.load_model(args.whisper_model)
+    # 'float16' é o ideal para sua RTX 4070 (mais rápido e gasta menos memória)
+    hisper_model = WhisperModel(args.whisper_model, device="cuda", compute_type="float16")
     
     for nome_arquivo in arquivos:
         caminho_midia = os.path.join(temp_dir, nome_arquivo)
