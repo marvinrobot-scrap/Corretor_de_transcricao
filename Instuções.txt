@@ -17,7 +17,7 @@ As instruções para executar a transcrição e o ajuste do texto são:
 python gerar_narrativa_lmstudio.py -m "meta-llama-3.1-8b-instruct"
 
 # Especificando modelo Qwen (padrão)
-python gerar_narrativa_lmstudio.py -m "qwen2.5-7b-instruct-1m@q8_0"
+python gerar_narrativa_lmstudio.py
 
 # Todas as opções
 python transcricao_narrativa.py -w large-v3 -m "qwen2.5-7b-instruct" -u "http://localhost:1234/v1/chat/completions"
