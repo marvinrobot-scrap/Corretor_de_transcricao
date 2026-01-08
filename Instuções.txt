@@ -1,16 +1,23 @@
-Os arquivos devem ser nomeadso como Nome do Depoente_papel.extensao
-Por exemplo:
+O objejivo desse script é fazer transcrições de audiência e exportar em um formato de texto contínuo e organizado.
 
+Os arquivos para transcrição são colocados na pasta temp com o nome do arquivo seguido o padrão:
+NomeDoDepoente_papel
+Por exemplo:
 temp/
 ├── João Silva_testemunha.mp4
 ├── Maria Santos_vitima.mp3
 ├── Pedro Costa_acusado.wav
 └── Ana Oliveira_informante.mp4
 
-Para executar a tarefa, usar o comando:
-python gerar_narrativa_lmstudio.py
+Os resultados são exportados para a pasta result em dois arquivos de texto.
 
-Ou, caso deseje escolher o modelo do whisper:
-python gerar_narrativa_lmstudio.py -w small
+As instruções para executar a transcrição e o ajuste do texto são:
 
-Se precisar mudar o modelo no futuro:mudar a linha 16 MODELO_LM_STUDIO = "meta-llama-3.1-8b-instruct"
+# Com modelo Llama
+python gerar_narrativa_lmstudio.py -m "meta-llama-3.1-8b-instruct"
+
+# Especificando modelo Qwen (padrão)
+python gerar_narrativa_lmstudio.py -m "qwen2.5-7b-instruct-1m@q8_0"
+
+# Todas as opções
+python transcricao_narrativa.py -w large-v3 -m "qwen2.5-7b-instruct" -u "http://localhost:1234/v1/chat/completions"
